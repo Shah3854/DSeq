@@ -11,23 +11,23 @@ library(genefilter)
 library(stringr)
 library(LSD)
 library(apeglm)
-library(dplyr)
 library(tidyverse)
 library(matrixStats)
-library(pheatmap)
+# Load required libraries
+library(EnhancedVolcano)
 
 args <- commandArgs(trailingOnly = TRUE)
 
-# Load the data
-counts <- read.csv("/Counts/lnc_counts.tsv" , sep = "\t", header = TRUE, row.names = c(1))
-# head(counts)
+# Load the count data
+counts <- read.csv("Path/PCA_raw.txt", sep = "\t", header = TRUE, row.names = 1)
 
-x<- counts[, c("B_1","B_2", "A_1", "A_2")]
-# view(x)
+# Load the condition data from a CSV file
+condition_data <- read.csv("Path/condition.csv", header = TRUE)
+condition <- as.character(condition_data$Condition)
+coldata <- data.frame(row.names = condition_data$Sample, condition)
 
-# Define conditions
-condition <- c("PC", "PC", "T", "T")
-coldata <- data.frame(row.names = colnames(x), condition)
+# Subset the counts data to match the samples in condition data
+x <- counts[, rownames(coldata)]
 
 # Create DESeqDataSet
 dds <- DESeqDataSetFromMatrix(countData = x[rowSums(x) > 0,], colData = coldata, design = ~condition)
@@ -38,63 +38,51 @@ ddsDE <- DESeq(dds)
 # Get results and filter
 results <- results(ddsDE)
 res <- na.exclude(as.data.frame(results))
-
-write.csv(results, "/result.csv")
+write.csv(results, "path/result.csv")
 
 filter <- res[(abs(res$log2FoldChange) > 1.5 & res$pvalue <= 0.05),]
-write.csv(filter, "filter.csv", quote = FALSE, col.names = NA)
-
+write.csv(filter, "Path/filter.csv", quote = FALSE, col.names = NA)
 
 # Export normalized counts
 normcounts <- counts(ddsDE, normalized = TRUE)
-write.csv(normcounts, "norm_counts.csv")
+write.csv(normcounts, "Path/norm_counts.csv")
 
-#MA PLOT
-pdf("maplot.pdf", height = 10, width = 10)
+# MA Plot
+pdf("Path/maplot.pdf", height = 10, width = 10)
 plotMA(results)
 dev.off()
 
-#Boxplot
-pdf("/boxplot.pdf", height = 10, width = 10)
-colors = c(rep("dodgerblue",2), rep("green",2))
-boxplot(log2(counts(dds, normalized=FALSE)+1), col=colors, outline = FALSE, main="Box-plot of Normalized counts", xlab="Samples", ylab="log transformed normalized counts")
-legend("topright", inset=0, title="Sample type", c("Positive Control", "Treatment"), fill=c("dodgerblue","green"), cex=0.8)
-dev.off()
-dds <- estimateSizeFactors(dds)
-
-
-# Calculate averages for scatter plot
-res$B_1 <- normcounts[rownames(res), "B_1"]
-res$B_2 <- normcounts[rownames(res), "B_2"]
-res$A_1 <- normcounts[rownames(res), "A_1"]
-res$A_2 <- normcounts[rownames(res), "A_2"]
-res$positivecontrol_avg <- (res$B_1 + res$B_2) / 2
-res$treatment_avg <- (res$A_1 + res$A_2) / 2
-
-# Define gene status (up, down, NS)
-res$status <- "NotSignificant"
-res$status[res$log2FoldChange > 0.5] <- "Upregulated"
-res$status[res$log2FoldChange < -0.5] <- "Downregulated"
-
-# Create the scatter plot 
-pdf("/scatterplot.pdf", height = 10, width = 10)
-ggplot(res, aes(x = positivecontrol_avg, y = treatment_avg, color = status)) +
-  geom_point(alpha = 0.8) +  # Increase the alpha to make points less transparent
-  scale_color_manual(values = c("Upregulated" = "blue", "Downregulated" = "red", "NotSignificant" = "grey")) +  # Use clear, distinct colors
-  labs(title = "Scatter Plot of Normalized Counts (Positive Control vs Treatment)",
-       x = "Average Normalized Counts (Positive Control)",
-       y = "Average Normalized Counts (Treatment)",
-       color = "Gene Status") +
-  coord_cartesian(xlim = c(0, 500), ylim = c(0, 500)) +  # Adjust the zoom as needed
-  theme_minimal()
+# Boxplot
+pdf("Path/boxplot.pdf", height = 10, width = 10)
+colors <- factor(condition)
+boxplot(log2(counts(dds, normalized=FALSE) + 1), col=colors, outline = FALSE,
+        main="Box-plot of Normalized Counts", xlab="Samples", ylab="log transformed normalized counts")
+legend("topright", inset=0, title="Sample Type", legend=levels(colors), fill=rainbow(length(levels(colors))), cex=0.8)
 dev.off()
 
-#multiecdf
-# multiecdf(counts(dds, normalized=TRUE)[,], xlab="Meancounts", xlim=c(0,1000))
+# Scatter Plot
+res <- res %>% mutate(positivecontrol_avg = rowMeans(normcounts[, condition_data$Sample[condition_data$Condition == "PC"]]),
+                      treatment_avg = rowMeans(normcounts[, condition_data$Sample[condition_data$Condition == "T"]]))
+ res$status <- "NotSignificant"
+ res$status[res$log2FoldChange > 0.5] <- "Upregulated"
+ res$status[res$log2FoldChange < -0.5] <- "Downregulated"
 
-##volcano-plot 
-pdf("/volcano.pdf", height = 10, width = 10)
-plot(res$log2FoldChange, -log10(res$pvalue), pch = 20, main = "Positive Control vs Treatment", col = "grey", xlim = c(-10, 10), xlab = "log2(FoldChange)", ylab = "-log10(pvalue)")
+pdf("Path/scatterplot.pdf", height = 10, width = 10)
+ ggplot(res, aes(x = positivecontrol_avg, y = treatment_avg, color = status)) +
+   geom_point(alpha = 0.8) +
+   scale_color_manual(values = c("Upregulated" = "blue", "Downregulated" = "red", "NotSignificant" = "grey")) +
+   labs(title = "Scatter Plot of Normalized Counts (Positive Control vs Treatment)",
+        x = "Average Normalized Counts (Positive Control)",
+        y = "Average Normalized Counts (Treatment)",
+        color = "Gene Status") +
+   coord_cartesian(xlim = c(0, 500), ylim = c(0, 500)) +
+   theme_minimal()
+ dev.off()
+
+# Volcano Plot
+pdf("Path/volcano.pdf", height = 10, width = 10)
+plot(res$log2FoldChange, -log10(res$pvalue), pch = 20, col = "grey", xlim = c(-10, 10),
+     xlab = "log2(FoldChange)", ylab = "-log10(pvalue)", main = "Positive Control vs Treatment")
 with(subset(res, pvalue <= 0.05 & log2FoldChange > 2), points(log2FoldChange, -log10(pvalue), pch = 20, col = "blue"))
 with(subset(res, pvalue <= 0.05 & log2FoldChange < -2), points(log2FoldChange, -log10(pvalue), pch = 20, col = "red"))
 abline(h = -log10(0.05), lty = 2)
@@ -102,57 +90,42 @@ abline(v = -2, lty = 2)
 abline(v = 2, lty = 2)
 dev.off()
 
-
 # Heatmap
-df <- read.csv("/norm_counts.csv",row.names=NULL)
+df <- read.csv("Path/norm_counts.csv", row.names=1)
+df[df == 0] <- NA
+df2 <- df[complete.cases(df),]
 
-class(df)
-df[df==0] <- NA
-df2<-df[complete.cases(df),]
-
-rownames(df2) <- df2[, 1]
-df2 <- df2[, -1]
-
-# pick top 50 rows with highest values
 top <- df2[order(apply(df2, 1, max), decreasing = TRUE)[1:50],]
-write.csv(top, "/top50.csv")
-top %>% select(1:4)  -> heatmap_data
-heatmap_data %>% pheatmap()
-#png("test.png",width=8,height=8,units="in",res=1500)
-heatmap_data %>% pheatmap()
-heatmap_data %>% log2() -> heatmap_data_log
-heatmap_data_log %>% pheatmap()
-#png("test2.png",width=8,height=8,units="in",res=1500)
-heatmap_data_log %>% pheatmap()
-heatmap_data_log - rowMeans((heatmap_data_log)) -> heatmap_data_meanSubtract
-heatmap_data_meanSubtract %>% pheatmap()
-#png("test3.png",width=8,height=8,units="in",res=1500)
-heatmap_data_meanSubtract %>% pheatmap()
-#dev.off()
+write.csv(top, "Path/top50.csv")
 
-heatmap_data_meanSubtract/rowSds(as.matrix(heatmap_data_log)) -> heatmap_data_zscores
-#png("test4.png",width=8,height=8,units="in",res=1500)
-heatmap_data_zscores %>% pheatmap(cluster_rows=TRUE , cluster_cols=F , show_rownames = F, border_color = NA)
-
-pdf("/heatmap.pdf", height = 10, width = 10)
-annot_cols <- data.frame(
-  Group = c( "Positive Control", "Positive Control", "Treatment","Treatment"),
-  row.names = colnames(heatmap_data_zscores)
-)
-
-color_palette <- colorRampPalette(c("red", "white", "purple"))(25)
-
-pheatmap(
-  heatmap_data_zscores,
-  show_rownames = F,
-  border_color = NA,
-  annotation_col = annot_cols,
-  cluster_rows = TRUE,
-  cluster_cols = F,
-  annotation_names_col = T
-)
+heatmap_data <- as.matrix(top)
+pdf("Path/heatmap.pdf", height = 10, width = 10)
+pheatmap(heatmap_data, cluster_rows=TRUE, cluster_cols=FALSE, show_rownames=TRUE,
+         annotation_col=data.frame(Group=condition, row.names=rownames(coldata)),
+         color=colorRampPalette(c("red", "white", "purple"))(25))
 dev.off()
 
+# Enhanced Volcano Plot
+pdf("Path/enhanced_volcano.pdf", height = 10, width = 10)
 
+EnhancedVolcano(res,
+                lab = rownames(res),  # Labels for genes
+                x = 'log2FoldChange',  # X-axis: log2 fold change
+                y = 'pvalue',  # Y-axis: p-value
+                title = 'Enhanced Volcano Plot: PC vs Treatment',
+                subtitle = 'Differential Expression Analysis',
+                xlab = bquote(~Log[2]~ 'Fold Change'),
+                ylab = bquote(~-Log[10]~ 'p-value'),
+                pCutoff = 0.05,  # Significance threshold
+                FCcutoff = 1.5,  # Fold-change cutoff
+                pointSize = 2.0,  # Size of points
+                labSize = 4.0,  # Label text size
+                colAlpha = 0.75,  # Transparency
+                legendLabels = c('NS', 'Log2FC', 'p-value', 'Both'),
+                legendPosition = 'right',
+                col = c('grey30', 'royalblue', 'red2', 'purple'),
+                drawConnectors = TRUE,  # Draw lines to labels
+                widthConnectors = 0.5
+)
 
-# sessionInfo()
+dev.off()
